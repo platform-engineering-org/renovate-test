@@ -2,5 +2,28 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "github>platform-engineering-org/.github"
+  ],
+  "customDatasources": {
+    "dates": {
+      "defaultRegistryUrlTemplate": "http://worldtimeapi.org/api/ip",
+      "transformTemplates": [
+        "{\"releases\": [{\"version\": datatime}]}"
+      ],
+      "format": "json"
+    }
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "date.txt"
+      ],
+      "matchStrings": [
+        "today=(?<currentValue>.*)"
+      ],
+      "datasourceTemplate": "custom.dates",
+      "depNameTemplate": "today",
+      "versioningTemplate": "regex:^(?<major>\\d{4}-\\d{2}-\\d{2}).*$"
+    }
   ]
 }
