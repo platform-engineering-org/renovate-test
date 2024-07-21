@@ -7,7 +7,7 @@
     "dates": {
       "defaultRegistryUrlTemplate": "http://worldtimeapi.org/api/ip",
       "transformTemplates": [
-        "{\"releases\":[{\"version\": $$.datetime}]}"
+        "{\"releases\":[{\"version\": $substringBefore($$.datetime,"T")}]}"
       ],
       "format": "json"
     }
@@ -23,7 +23,7 @@
       ],
       "datasourceTemplate": "custom.dates",
       "depNameTemplate": "today",
-      "versioningTemplate": "regex:^(?<major>\\d{4})-(?<minor>\\d{2})-(?<patch>\\d{2}).*$"
+      "versioningTemplate": "regex:^(?<major>\\d{4})-(?<minor>\\d{2})-(?<patch>\\d{2})$"
     }
   ]
 }
