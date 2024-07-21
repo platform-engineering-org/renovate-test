@@ -23,7 +23,7 @@
       ],
       "datasourceTemplate": "custom.dates",
       "depNameTemplate": "today",
-      "versioningTemplate": "regex:^(?<major>\\d{4}-\\d{2}-\\d{2}).*$"
+      "versioningTemplate": "regex:^(?<major>ֿֿֿ\\ֿֿֿֿd{4})-(?<minor>\\d{2})-(?<patch>\\d{2}).*$"
     }
   ]
 }
