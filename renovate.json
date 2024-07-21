@@ -7,7 +7,7 @@
     "dates": {
       "defaultRegistryUrlTemplate": "http://worldtimeapi.org/api/ip",
       "transformTemplates": [
-        "datetime"
+        "{\"releases\":[{\"version\": datetime]}]}"
       ],
       "format": "json"
     }
