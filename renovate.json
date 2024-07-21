@@ -7,7 +7,7 @@
     "dates": {
       "defaultRegistryUrlTemplate": "http://worldtimeapi.org/api/ip",
       "transformTemplates": [
-        "{\"releases\":[{\"version\": $substringBefore(datetime, "T")}]}"
+        "{\"releases\":[{\"version\": $substringBefore($$.datetime,\"T\")}]}"
       ],
       "format": "json"
     }
