@@ -28,5 +28,8 @@
   ],
   "git-submodules": {
     "enabled": true
-  }
+  },
+  "hostRules": [
+    "hostType": "gitlab"
+  ]
 }
