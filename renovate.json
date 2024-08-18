@@ -30,6 +30,8 @@
     "enabled": true
   },
   "hostRules": [
-    "hostType": "gitlab"
+    {
+      "hostType": "gitlab"
+    }
   ]
 }
