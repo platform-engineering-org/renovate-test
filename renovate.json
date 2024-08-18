@@ -29,9 +29,5 @@
   "git-submodules": {
     "enabled": true
   },
-  "hostRules": [
-    {
-      "hostType": "gitlab"
-    }
-  ]
+  "detectHostRulesFromEnv": true
 }
