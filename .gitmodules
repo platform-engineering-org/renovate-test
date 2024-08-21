@@ -1,3 +1,0 @@
-[submodule "renovate-config"]
-  path = renovate-config
-  url = https://gitlab.com/redhat/rhel/bifrost/renovate-config.git
