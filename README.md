@@ -1,3 +1,0 @@
-# renovate-test
-
-Bumping date
