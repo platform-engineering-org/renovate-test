@@ -4,29 +4,6 @@
     "github>platform-engineering-org/.github",
     "github>platform-engineering-org/.github//fedora.json"
   ],
-  "customDatasources": {
-    "dates": {
-      "defaultRegistryUrlTemplate": "http://worldtimeapi.org/api/ip",
-      "transformTemplates": [
-        "{\"releases\":[{\"version\": $substringBefore($$.datetime,\"T\")}]}"
-      ],
-      "format": "json"
-    }
-  },
-  "customManagers": [
-    {
-      "customType": "regex",
-      "fileMatch": [
-        "date.txt"
-      ],
-      "matchStrings": [
-        "today=(?<currentValue>.*)"
-      ],
-      "datasourceTemplate": "custom.dates",
-      "depNameTemplate": "today",
-      "versioningTemplate": "regex:^(?<major>\\d{4})-(?<minor>\\d{2})-(?<patch>\\d{2})$"
-    }
-  ],
   "git-submodules": {
     "enabled": false
   }
