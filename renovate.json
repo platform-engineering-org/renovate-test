@@ -29,6 +29,5 @@
   ],
   "git-submodules": {
     "enabled": true
-  },
-  "detectHostRulesFromEnv": true
+  }
 }
