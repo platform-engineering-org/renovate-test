@@ -3,5 +3,6 @@
   "extends": [
     "github>platform-engineering-org/.github",
     "github>platform-engineering-org/.github//fedora.json"
-  ]
+  ],
+  "schedule": ["at any time"]
 }
