@@ -1,0 +1,567 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+variables:
+  TESTING_FARM_API_URL: https://api.dev.testing-farm.io
+
+stages:
+  - create
+  - test
+  - close
+
+create-test-run:
+  stage: create
+  tags:
+    - bootc-openstack-runner
+  image: quay.io/fedora/fedora:39 # renovate: datasource=endoflife-date depName=fedora versioning=docker
+  id_tokens:
+    GCP_ID_TOKEN:
+      aud: https://iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WORKLOAD_IDENTITY_FEDERATION_POOL_ID}/providers/${GCP_WORKLOAD_IDENTITY_FEDERATION_PROVIDER_ID}
+  secrets:
+    QUAY_USERNAME:
+      gcp_secret_manager:
+        name: QUAY_USERNAME
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    QUAY_PASSWORD:
+      gcp_secret_manager:
+        name: QUAY_PASSWORD
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    REGISTRY_STAGE_USERNAME:
+      gcp_secret_manager:
+        name: REGISTRY_STAGE_USERNAME
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    REGISTRY_STAGE_PASSWORD:
+      gcp_secret_manager:
+        name: REGISTRY_STAGE_PASSWORD
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+  variables:
+    RHEL94_TIER1_IMAGE_URL: registry.stage.redhat.io/rhel9/rhel-bootc:rhel-9.4
+    RHEL95_TIER1_IMAGE_URL: registry.stage.redhat.io/rhel9/rhel-bootc:rhel-9.5
+    RHEL10_TIER1_IMAGE_URL: registry.stage.redhat.io/rhel10-beta/rhel-bootc:rhel-10.0-beta
+    BOOTC95_TIER1_IMAGE_URL: quay.io/redhat_emp1/image-mode-test:rhel-9-5-bootc
+  before_script:
+    - dnf install -y curl jq podman skopeo
+  script:
+    - |
+      podman login -u $REGISTRY_STAGE_USERNAME -p $REGISTRY_STAGE_PASSWORD registry.stage.redhat.io
+      case "$TEST_RUN" in
+        "rhel-bootc:9.4")
+          TIER1_IMAGE_URL=$RHEL94_TIER1_IMAGE_URL
+          COMPOSE_ID=$(skopeo inspect --retry-times=5 --tls-verify=false "docker://${TIER1_IMAGE_URL}" | jq -r '.Labels."redhat.compose-id"')
+          BIB_IMAGE_URL="registry.stage.redhat.io/rhel9/bootc-image-builder:rhel-9.4"
+          EPIC_ID=1
+          DISTRO=rhel-9.4
+          TF_COMPOSE=RHEL-9.4.0-Nightly
+          ;;
+        "rhel-bootc:9.5")
+          TIER1_IMAGE_URL=$RHEL95_TIER1_IMAGE_URL
+          COMPOSE_ID=$(skopeo inspect --retry-times=5 --tls-verify=false "docker://${TIER1_IMAGE_URL}" | jq -r '.Labels."redhat.compose-id"')
+          BIB_IMAGE_URL="registry.stage.redhat.io/rhel9/bootc-image-builder:rhel-9.5"
+          EPIC_ID=2
+          DISTRO=rhel-9.5
+          TF_COMPOSE=RHEL-9.5.0-Nightly
+          ;;
+        "bootc-rpm:9.5")
+          TIER1_IMAGE_URL=$BOOTC95_TIER1_IMAGE_URL
+          podman login -u $QUAY_USERNAME -p $QUAY_PASSWORD quay.io
+          COMPOSE_ID=$(skopeo inspect --retry-times=5 --tls-verify=false "docker://${TIER1_IMAGE_URL}" | jq -r '.Labels."redhat.compose-id"')
+          BIB_IMAGE_URL="registry.stage.redhat.io/rhel9/bootc-image-builder:rhel-9.5"
+          EPIC_ID=4
+          DISTRO=rhel-9.5
+          TF_COMPOSE=RHEL-9.5.0-Nightly
+          ;;
+        "rhel-bootc:10.0")
+          TIER1_IMAGE_URL=$RHEL10_TIER1_IMAGE_URL
+          COMPOSE_ID=$(skopeo inspect --retry-times=5 --tls-verify=false "docker://${TIER1_IMAGE_URL}" | jq -r '.Labels."redhat.compose-id"')
+          BIB_IMAGE_URL="registry.stage.redhat.io/rhel10-beta/bootc-image-builder:rhel-10.0-beta"
+          EPIC_ID=3
+          DISTRO=rhel-10
+          TF_COMPOSE=Fedora-40
+          ;;
+      esac
+      echo "TIER1_IMAGE_URL=$TIER1_IMAGE_URL" >> create.env
+      echo "DISTRO=$DISTRO" >> create.env
+      echo "TF_COMPOSE=$TF_COMPOSE" >> create.env
+      echo "$TIER1_IMAGE_URL" "$DISTRO"
+    - |
+      IMAGE_DIGEST=$(skopeo inspect --retry-times=5 --tls-verify=false docker://$TIER1_IMAGE_URL | jq -r '.Digest')
+      IMAGE_VERSION=$(skopeo inspect --retry-times=5 --tls-verify=false docker://$TIER1_IMAGE_URL | jq -r '.Labels."org.opencontainers.image.version"')
+      KERNEL_VERSION=$(skopeo inspect --retry-times=5 --tls-verify=false docker://$TIER1_IMAGE_URL | jq -r '.Labels."ostree.linux"')
+      BOOTC_VERSION=$(podman run --tls-verify=false --rm $TIER1_IMAGE_URL rpm -qa | grep bootc)
+      OSTREE_VERSION=$(podman run --tls-verify=false --rm $TIER1_IMAGE_URL rpm -qa | grep "^ostree-2")
+      BOOTUPD_VERSION=$(podman run --tls-verify=false --rm $TIER1_IMAGE_URL rpm -qa | grep bootupd)
+      BIB_IMAGE_DIGEST=$(skopeo inspect --retry-times=5 --tls-verify=false "docker://$BIB_IMAGE_URL" | jq -r '.Digest')
+      BIB_BUILD_DATE=$(skopeo inspect --retry-times=5 --tls-verify=false "docker://$BIB_IMAGE_URL" | jq -r '.Labels."build-date"')
+      CURRENT_DATE_TIME=$(date +'%Y-%m-%d %H:%M')
+    - |
+      curl --silent \
+        --header "Private-Token: $GITLAB_GROUP_GLGAT" \
+        --header "Content-Type: application/json" \
+        --request POST \
+        "https://gitlab.com/api/v4/projects/$PROJECT_ID/issues" \
+        --data-raw "{
+          \"title\": \"Test Run - $TEST_RUN [$CURRENT_DATE_TIME]\",
+          \"description\": \"## Test Run Details\n| image | $TIER1_IMAGE_URL |\n| --- | --- |\n| date | $CURRENT_DATE_TIME |\n| image digest | \`$IMAGE_DIGEST\` |\n| image version | $IMAGE_VERSION |\n| kernel version | \`$KERNEL_VERSION\` |\n| compose id | $COMPOSE_ID |\n| bootc version | $BOOTC_VERSION |\n| ostree version | $OSTREE_VERSION |\n| bootupd version | $BOOTUPD_VERSION |\n\n| bib image | $BIB_IMAGE_URL |\n| --- | --- |\n| bib image digest | \`$BIB_IMAGE_DIGEST\` |\n| bib build date | $BIB_BUILD_DATE |\n\n ## Test Run Pipeline\n$CI_PIPELINE_URL\n\n ## Test Run Log\n| Test Case | Testing Farm Log |\n| --- | --- |\"
+        }" | tee issue_response.json
+    - |
+      IID=$(jq -r '.iid' issue_response.json)
+      ID=$(jq -r '.id' issue_response.json)
+      echo "IID=$IID" >> create.env
+      echo "$IID" "$ID"
+    - |
+      curl --silent \
+        --header "Private-Token: $GITLAB_GROUP_GLGAT" \
+        --request POST \
+        "https://gitlab.com/api/v4/groups/$TEST_GROUP_ID/epics/$EPIC_ID/issues/$ID"
+  artifacts:
+    reports:
+      dotenv: create.env
+
+bootc-workflow-test:
+  stage: test
+  tags:
+    - bootc-openstack-runner
+  image: quay.io/fedora/fedora:40 # renovate: datasource=endoflife-date depName=fedora versioning=docker
+  timeout: 2h30m
+  dependencies:
+    - create-test-run
+  parallel:
+    matrix:
+      - PLAN: [/anaconda/, /bib-image/, /os-replace/]
+        ARCH: [x86_64, aarch64]
+  id_tokens:
+    GCP_ID_TOKEN:
+      aud: https://iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WORKLOAD_IDENTITY_FEDERATION_POOL_ID}/providers/${GCP_WORKLOAD_IDENTITY_FEDERATION_PROVIDER_ID}
+  secrets:
+    AWS_ACCESS_KEY_ID:
+      gcp_secret_manager:
+        name: AWS_ACCESS_KEY_ID
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    AWS_SECRET_ACCESS_KEY:
+      gcp_secret_manager:
+        name: AWS_SECRET_ACCESS_KEY
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    AZURE_CLIENT_ID:
+      gcp_secret_manager:
+        name: AZURE_CLIENT_ID
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    AZURE_SECRET:
+      gcp_secret_manager:
+        name: AZURE_SECRET
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    AZURE_TENANT:
+      gcp_secret_manager:
+        name: AZURE_TENANT
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    BEAKER_CLIENT_B64:
+      gcp_secret_manager:
+        name: BEAKER_CLIENT_B64
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    BEAKER_KEYTAB_B64:
+      gcp_secret_manager:
+        name: BEAKER_KEYTAB_B64
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    KRB5_CONF_B64:
+      gcp_secret_manager:
+        name: KRB5_CONF_B64
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    GCP_PROJECT:
+      gcp_secret_manager:
+        name: GCP_PROJECT
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    GCP_SERVICE_ACCOUNT_FILE_B64:
+      gcp_secret_manager:
+        name: GCP_SERVICE_ACCOUNT_FILE_B64
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    GCP_SERVICE_ACCOUNT_NAME:
+      gcp_secret_manager:
+        name: GCP_SERVICE_ACCOUNT_NAME
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    GOVC_URL:
+      gcp_secret_manager:
+        name: GOVC_URL
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    GOVC_USERNAME:
+      gcp_secret_manager:
+        name: GOVC_USERNAME
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    GOVC_PASSWORD:
+      gcp_secret_manager:
+        name: GOVC_PASSWORD
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    OS_AUTH_URL:
+      gcp_secret_manager:
+        name: OS_AUTH_URL
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    OS_USERNAME:
+      gcp_secret_manager:
+        name: OS_USERNAME
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    OS_PASSWORD:
+      gcp_secret_manager:
+        name: OS_PASSWORD
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    QUAY_USERNAME:
+      gcp_secret_manager:
+        name: QUAY_USERNAME
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    QUAY_PASSWORD:
+      gcp_secret_manager:
+        name: QUAY_PASSWORD
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    QUAY_SECRET:
+      gcp_secret_manager:
+        name: QUAY_SECRET
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    RHC_AK:
+      gcp_secret_manager:
+        name: RHC_AK
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    RHC_ORGID:
+      gcp_secret_manager:
+        name: RHC_ORGID
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    DOWNLOAD_NODE:
+      gcp_secret_manager:
+        name: DOWNLOAD_NODE
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    TESTING_FARM_API_TOKEN:
+      gcp_secret_manager:
+        name: TESTING_FARM_API_TOKEN
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    REGISTRY_STAGE_USERNAME:
+      gcp_secret_manager:
+        name: REGISTRY_STAGE_USERNAME
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+    REGISTRY_STAGE_PASSWORD:
+      gcp_secret_manager:
+        name: REGISTRY_STAGE_PASSWORD
+        version: 1
+      token: $GCP_ID_TOKEN
+      file: false
+  variables:
+    TF_TIMEOUT: 120
+    RUNNER_SCRIPT_TIMEOUT: 2h30m
+    AWS_REGION: us-west-2
+    GOVC_INSECURE: 1
+    OS_USER_DOMAIN_NAME: redhat.com
+    OS_PROJECT_DOMAIN_NAME: redhat.com
+    OS_PROJECT_NAME: 3rd
+  before_script:
+    - sudo dnf install -y curl jq
+  script:
+    - |
+      case "$PLAN" in
+        "/anaconda/")
+          LABEL_PLAN="anaconda"
+          # workaround issue https://github.com/containers/bootc/issues/509#issuecomment-2161081699
+          if [[ "$DISTRO" == "fedora" ]]; then
+            TF_COMPOSE=RHEL-9.5.0-Nightly
+          fi
+          ;;
+        "/bib-image/")
+          LABEL_PLAN="bib"
+          ;;
+        "/os-replace/")
+          LABEL_PLAN="bootc install"
+          # workaround issue https://github.com/containers/bootc/issues/509#issuecomment-2161081699
+          if [[ "$DISTRO" == "fedora" ]]; then
+            TF_COMPOSE=RHEL-9.5.0-Nightly
+          fi
+          ;;
+      esac
+      # pass LABEL_PLAN to after_script
+      echo "$LABEL_PLAN" > LABEL_PLAN.var
+    - |
+      TEMPDIR=$(mktemp -d -u)
+      curl --silent \
+        --header "Content-Type: application/json" \
+        --request POST \
+        "$TESTING_FARM_API_URL/v0.1/requests" \
+        --data-raw "{
+          \"api_key\": \"$TESTING_FARM_API_TOKEN\",
+          \"test\": {
+            \"fmf\": {
+              \"url\": \"https://gitlab.com/fedora/bootc/tests/bootc-workflow-test.git\",
+              \"ref\": \"main\",
+              \"name\": \"$PLAN\"
+            }
+          },
+          \"environments\": [
+            {
+              \"arch\": \"$ARCH\",
+              \"os\": {
+                \"compose\": \"$TF_COMPOSE\"
+              },
+              \"variables\": {
+                \"TEMPDIR\": \"$TEMPDIR\",
+                \"ARCH\": \"$ARCH\",
+                \"TIER1_IMAGE_URL\": \"$TIER1_IMAGE_URL\",
+                \"AWS_REGION\": \"$AWS_REGION\",
+                \"GCP_PROJECT\": \"$GCP_PROJECT\",
+                \"GOVC_INSECURE\": \"$GOVC_INSECURE\",
+                \"OS_USER_DOMAIN_NAME\": \"$OS_USER_DOMAIN_NAME\",
+                \"OS_PROJECT_NAME\": \"$OS_PROJECT_NAME\",
+                \"OS_PROJECT_DOMAIN_NAME\": \"$OS_PROJECT_DOMAIN_NAME\",
+                \"OS_PROJECT_DOMAIN_NAME\": \"$OS_PROJECT_DOMAIN_NAME\"
+              },
+              \"secrets\": {
+                \"QUAY_USERNAME\": \"$QUAY_USERNAME\",
+                \"QUAY_PASSWORD\": \"$QUAY_PASSWORD\",
+                \"QUAY_SECRET\": \"$QUAY_SECRET\",
+                \"REGISTRY_STAGE_USERNAME\": \"$REGISTRY_STAGE_USERNAME\",
+                \"REGISTRY_STAGE_PASSWORD\": \"$REGISTRY_STAGE_PASSWORD\",
+                \"DOWNLOAD_NODE\": \"$DOWNLOAD_NODE\",
+                \"RHC_AK\": \"$RHC_AK\",
+                \"RHC_ORGID\": \"$RHC_ORGID\",
+                \"AWS_ACCESS_KEY_ID\": \"$AWS_ACCESS_KEY_ID\",
+                \"AWS_SECRET_ACCESS_KEY\": \"$AWS_SECRET_ACCESS_KEY\",
+                \"AZURE_CLIENT_ID\": \"$AZURE_CLIENT_ID\",
+                \"AZURE_SECRET\": \"$AZURE_SECRET\",
+                \"AZURE_TENANT\": \"$AZURE_TENANT\",
+                \"BEAKER_CLIENT_B64\": \"$BEAKER_CLIENT_B64\",
+                \"BEAKER_KEYTAB_B64\": \"$BEAKER_KEYTAB_B64\",
+                \"KRB5_CONF_B64\": \"$KRB5_CONF_B64\",
+                \"GCP_SERVICE_ACCOUNT_NAME\": \"$GCP_SERVICE_ACCOUNT_NAME\",
+                \"GCP_SERVICE_ACCOUNT_FILE_B64\": \"$GCP_SERVICE_ACCOUNT_FILE_B64\",
+                \"GOVC_URL\": \"$GOVC_URL\",
+                \"GOVC_USERNAME\": \"$GOVC_USERNAME\",
+                \"GOVC_PASSWORD\": \"$GOVC_PASSWORD\",
+                \"OS_AUTH_URL\": \"$OS_AUTH_URL\",
+                \"OS_USERNAME\": \"$OS_USERNAME\",
+                \"OS_PASSWORD\": \"$OS_PASSWORD\"
+              },
+              \"tmt\": {
+                \"context\": {
+                  \"arch\": \"$ARCH\",
+                  \"distro\": \"$DISTRO\"
+                }
+              }
+            }
+          ]
+        }" | tee tf_request_response.json
+    - jq '.' tf_request_response.json
+    - |
+      echo "Issue ID: $IID"
+      echo "TIER1_IMAGE_URL: $TIER1_IMAGE_URL"
+      echo "DISTRO: $DISTRO"
+      echo "TF_COMPOSE: $TF_COMPOSE"
+      # pass IID to after_script
+      echo "$IID" > IID.var
+      REQUEST_ID=$(jq -r '.id' tf_request_response.json)
+      # pass REQUEST_ID to after_script
+      echo "$REQUEST_ID" > REQUEST_ID.var
+      echo "TF request id: $REQUEST_ID"
+    - |
+      # tf artifacts has log url, then tf server accepted request
+      # let's update tf artifacts first
+      while true; do
+        TF_ARTIFACTS=$(curl --silent \
+          --request GET \
+          "$TESTING_FARM_API_URL/v0.1/requests/$REQUEST_ID" | jq -r '.run.artifacts')
+
+        if [[ "$TF_ARTIFACTS" != null ]]; then
+          echo "TF artifacts: $TF_ARTIFACTS"
+          break
+        fi
+
+        sleep 60
+      done
+
+    - |
+      # avoid writing description at the same time
+      sleep $(shuf -i1-60 -n1)
+      DESCRIPTION=$(curl --silent \
+        --header "Private-Token: $GITLAB_GROUP_GLGAT" \
+        --request GET \
+        "https://gitlab.com/api/v4/projects/$PROJECT_ID/issues/$IID" | jq '.description')
+
+      curl --silent \
+        --header "Private-Token: $GITLAB_GROUP_GLGAT" \
+        --header "Content-Type: application/json" \
+        --request PUT \
+        "https://gitlab.com/api/v4/projects/$PROJECT_ID/issues/$IID" \
+        --data-raw "{
+          \"description\": \"$(echo -E $DESCRIPTION | tr -d '"')\n| $LABEL_PLAN ($ARCH) | $TF_ARTIFACTS |\"
+        }"
+    - |
+      # let's deal with state
+      STATE=$(curl --silent \
+        --request GET \
+        "$TESTING_FARM_API_URL/v0.1/requests/$REQUEST_ID" | jq -r '.state')
+      echo "First TF state: $STATE"
+    - |
+      # complete state ends here
+      while true; do
+        STATE=$(curl --silent \
+          --request GET \
+          "$TESTING_FARM_API_URL/v0.1/requests/$REQUEST_ID" | jq -r '.state')
+
+        if [[ "$STATE" == "complete" ]]; then
+          TEST_RESULT=$(curl --silent \
+            --request GET \
+            "$TESTING_FARM_API_URL/v0.1/requests/$REQUEST_ID" | jq -r '.result.overall')
+          break
+        elif [[ "$STATE" == "canceled" ]] || [[ "$STATE" == "running" ]]; then
+          TEST_RESULT="running"
+          break
+        fi
+
+        sleep 30
+      done
+
+      curl --silent \
+        --header "Private-Token: $GITLAB_GROUP_GLGAT" \
+        --header "Content-Type: application/json" \
+        --request PUT \
+        "https://gitlab.com/api/v4/projects/$PROJECT_ID/issues/$IID" \
+        --data-raw "{
+          \"add_labels\": \"$LABEL_PLAN ($ARCH)::$TEST_RESULT\"
+        }"
+    - |
+      # running state ends here
+      if [[ "$STATE" == "running" ]]; then
+        for _ in $(seq 0 $TF_TIMEOUT); do
+          STATE=$(curl --silent \
+            --request GET \
+            "$TESTING_FARM_API_URL/v0.1/requests/$REQUEST_ID" | jq -r '.state')
+
+          if [[ "$STATE" != "running" ]]; then
+            echo "Complete TF state: $STATE"
+            break
+          fi
+
+          sleep 60
+        done
+      fi
+
+      echo "Last TF state: $STATE"
+
+      # TF 90 minutes timeout
+      # Do NOT delete the request in order to get the detailed logs
+      if [[ "$STATE" == "running" ]]; then
+        echo "Error: Test was running for $TF_TIMEOUT minutes"
+        curl --silent \
+          --header "Private-Token: $GITLAB_GROUP_GLGAT" \
+          --header "Content-Type: application/json" \
+          --request PUT \
+          "https://gitlab.com/api/v4/projects/$PROJECT_ID/issues/$IID" \
+          --data-raw "{
+            \"add_labels\": \"$LABEL_PLAN ($ARCH)::error\"
+          }"
+      # TF plan complete
+      elif [[ "$STATE" == "complete" ]]; then
+        TEST_RESULT=$(curl --silent \
+          --request GET \
+          "$TESTING_FARM_API_URL/v0.1/requests/$REQUEST_ID" | jq -r '.result.overall')
+        curl --silent \
+          --header "Private-Token: $GITLAB_GROUP_GLGAT" \
+          --header "Content-Type: application/json" \
+          --request PUT \
+          "https://gitlab.com/api/v4/projects/$PROJECT_ID/issues/$IID" \
+          --data-raw "{
+            \"add_labels\": \"$LABEL_PLAN ($ARCH)::$TEST_RESULT\"
+          }"
+      # TF plan has error
+      else
+        curl --silent \
+          --header "Private-Token: $GITLAB_GROUP_GLGAT" \
+          --header "Content-Type: application/json" \
+          --request PUT \
+          "https://gitlab.com/api/v4/projects/$PROJECT_ID/issues/$IID" \
+          --data-raw "{
+            \"add_labels\": \"$LABEL_PLAN ($ARCH)::error\"
+          }"
+      fi
+  after_script:
+    - |
+      # run if a job is canceled while the before_script or script section of that job are running
+      if [ "$CI_JOB_STATUS" == "canceled" ]; then
+        curl --silent \
+          --header "Private-Token: $GITLAB_GROUP_GLGAT" \
+          --header "Content-Type: application/json" \
+          --request PUT \
+          "https://gitlab.com/api/v4/projects/$PROJECT_ID/issues/$(cat IID.var)" \
+          --data-raw "{
+            \"add_labels\": \"$(cat LABEL_PLAN.var) ($ARCH)::error\"
+          }"
+
+      # Do NOT delete the request in order to get the detailed logs
+      fi
+
+close-test-run:
+  stage: close
+  tags:
+    - bootc-openstack-runner
+  image: quay.io/fedora/fedora:40 # renovate: datasource=endoflife-date depName=fedora versioning=docker
+  dependencies:
+    - create-test-run
+  script:
+    - echo $IID
+    - |
+      curl --silent \
+        --header "Private-Token: $GITLAB_GROUP_GLGAT" \
+        --header "Content-Type: application/json" \
+        --request PUT \
+        "https://gitlab.com/api/v4/projects/$PROJECT_ID/issues/$IID" \
+        --data-raw "{ \"state_event\": \"close\" }"
+  when: always
