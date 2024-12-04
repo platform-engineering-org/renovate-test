@@ -14,7 +14,7 @@ create-test-run:
   stage: create
   tags:
     - bootc-openstack-runner
-  image: quay.io/fedora/fedora:39 # renovate: datasource=endoflife-date depName=fedora versioning=docker
+  image: quay.io/fedora/fedora:41 # renovate: datasource=endoflife-date depName=fedora versioning=docker
   id_tokens:
     GCP_ID_TOKEN:
       aud: https://iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WORKLOAD_IDENTITY_FEDERATION_POOL_ID}/providers/${GCP_WORKLOAD_IDENTITY_FEDERATION_PROVIDER_ID}
@@ -130,7 +130,7 @@ bootc-workflow-test:
   stage: test
   tags:
     - bootc-openstack-runner
-  image: quay.io/fedora/fedora:40 # renovate: datasource=endoflife-date depName=fedora versioning=docker
+  image: quay.io/fedora/fedora:41 # renovate: datasource=endoflife-date depName=fedora versioning=docker
   timeout: 2h30m
   dependencies:
     - create-test-run
@@ -552,7 +552,7 @@ close-test-run:
   stage: close
   tags:
     - bootc-openstack-runner
-  image: quay.io/fedora/fedora:40 # renovate: datasource=endoflife-date depName=fedora versioning=docker
+  image: quay.io/fedora/fedora:41 # renovate: datasource=endoflife-date depName=fedora versioning=docker
   dependencies:
     - create-test-run
   script:
